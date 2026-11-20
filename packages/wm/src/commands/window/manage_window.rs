@@ -1,6 +1,9 @@
 use anyhow::Context;
 use tracing::info;
-use wm_common::{try_warn, WindowRuleEvent, WindowState, WmEvent};
+use wm_common::{
+  try_warn, FloatingStateConfig, FullscreenStateConfig, WindowRuleEvent,
+  WindowState, WmEvent,
+};
 use wm_platform::{NativeWindow, RectDelta};
 
 use crate::{
@@ -10,7 +13,7 @@ use crate::{
   },
   models::{
     Container, Monitor, NativeWindowProperties, NonTilingWindow,
-    TilingWindow, WindowContainer,
+    TilingWindow, WindowContainer, Workspace,
   },
   traits::{CommonGetters, PositionGetters, WindowGetters},
   user_config::UserConfig,
@@ -166,25 +169,47 @@ fn create_window(
     .context("No nearest workspace.")?;
 
   let gaps_config = config.value.gaps.clone();
-  let window_state =
-    window_state_to_create(&native_properties, &nearest_monitor, config)?;
+  let on_floating_monitor = is_floating_monitor(&nearest_monitor, config);
+  let window_state = window_state_to_create(
+    &native_properties,
+    &nearest_monitor,
+    on_floating_monitor,
+    config,
+  )?;
+
+  // Windows that start maximized on a floating monitor go back to floating
+  // (instead of the default initial state) once unmaximized.
+  let prev_state = (on_floating_monitor
+    && matches!(window_state, WindowState::Fullscreen(_)))
+  .then(|| WindowState::Floating(floating_monitor_state(config)));
 
   // Attach the new window as the first child of the target parent (if
-  // provided), otherwise, add as a sibling of the focused container.
+  // provided), otherwise, add as a sibling of the focused container (or
+  // a container on the monitor the OS spawned it on).
   let (target_parent, target_index) = match target_parent {
     Some(parent) => (parent, 0),
-    None => insertion_target(&window_state, state)?,
+    None => {
+      let native_workspace = config
+        .value
+        .window_behavior
+        .open_on_native_monitor
+        .then_some(&nearest_workspace);
+
+      insertion_target(&window_state, native_workspace, state)?
+    }
   };
 
   let target_workspace =
     target_parent.workspace().context("No target workspace.")?;
 
-  let prefers_centered = config
-    .value
-    .window_behavior
-    .state_defaults
-    .floating
-    .centered;
+  // Windows on a floating monitor keep the position the OS gave them.
+  let prefers_centered = !on_floating_monitor
+    && config
+      .value
+      .window_behavior
+      .state_defaults
+      .floating
+      .centered;
 
   // Calculate where window should be placed when floating is enabled. Use
   // the original width/height of the window and optionally position it in
@@ -231,7 +256,7 @@ fn create_window(
       native_window,
       native_properties,
       window_state,
-      None,
+      prev_state,
       border_delta,
       None,
       floating_placement,
@@ -259,12 +284,47 @@ fn create_window(
   Ok(window_container)
 }
 
+/// Gets whether the monitor is listed in `floating_monitors`, either by
+/// its device path or its device name.
+fn is_floating_monitor(monitor: &Monitor, config: &UserConfig) -> bool {
+  let properties = monitor.native_properties();
+  #[cfg(target_os = "windows")]
+  let names = [properties.device_path, Some(properties.device_name)];
+  #[cfg(not(target_os = "windows"))]
+  let names = [Some(properties.device_name)];
+
+  config
+    .value
+    .window_behavior
+    .floating_monitors
+    .iter()
+    .any(|floating| {
+      names
+        .iter()
+        .flatten()
+        .any(|name| name.eq_ignore_ascii_case(floating))
+    })
+}
+
+/// Gets the floating state for windows created on a floating monitor.
+///
+/// Unlike the configured defaults, these are never centered so that they
+/// keep the position given by the OS.
+fn floating_monitor_state(config: &UserConfig) -> FloatingStateConfig {
+  FloatingStateConfig {
+    centered: false,
+    ..config.value.window_behavior.state_defaults.floating.clone()
+  }
+}
+
 /// Gets the initial state for a window based on its native state.
 ///
-/// Note that maximized windows are initialized as tiling.
+/// Note that maximized windows are initialized as tiling, except on a
+/// floating monitor, where they stay maximized.
 fn window_state_to_create(
   native_properties: &NativeWindowProperties,
   nearest_monitor: &Monitor,
+  on_floating_monitor: bool,
   config: &UserConfig,
 ) -> anyhow::Result<WindowState> {
   if native_properties.is_minimized {
@@ -298,6 +358,23 @@ fn window_state_to_create(
     ));
   }
 
+  // Windows on a floating monitor are never tiled.
+  if on_floating_monitor {
+    return Ok(if native_properties.is_maximized {
+      WindowState::Fullscreen(FullscreenStateConfig {
+        maximized: true,
+        ..config
+          .value
+          .window_behavior
+          .state_defaults
+          .fullscreen
+          .clone()
+      })
+    } else {
+      WindowState::Floating(floating_monitor_state(config))
+    });
+  }
+
   // Initialize windows that can't be resized as floating.
   if !native_properties.is_resizable {
     return Ok(WindowState::Floating(
@@ -310,17 +387,21 @@ fn window_state_to_create(
 
 /// Gets where to insert a new window in the container tree.
 ///
+/// The target workspace is `native_workspace` if provided, otherwise the
+/// focused workspace.
+///
 /// Rules:
 /// - For non-tiling windows: Always append to the workspace.
 /// - For tiling windows:
-///   1. Try to insert after the focused tiling window if one exists.
-///   2. If a non-tiling window is focused, try to insert after the first
-///      tiling window found.
+///   1. Try to insert after the focused tiling window if one exists in the
+///      target workspace.
+///   2. Otherwise, try to insert after the first tiling window found.
 ///   3. If no tiling windows exist, append to the workspace.
 ///
 /// Returns tuple of (parent container, insertion index).
 fn insertion_target(
   window_state: &WindowState,
+  native_workspace: Option<&Workspace>,
   state: &WmState,
 ) -> anyhow::Result<(Container, usize)> {
   let focused_container =
@@ -329,12 +410,18 @@ fn insertion_target(
   let focused_workspace =
     focused_container.workspace().context("No workspace.")?;
 
+  let target_workspace = native_workspace.unwrap_or(&focused_workspace);
+  let is_focused_workspace =
+    target_workspace.id() == focused_workspace.id();
+
   // For tiling windows, try to find a suitable tiling window to insert
   // next to.
   if *window_state == WindowState::Tiling {
     let sibling = match focused_container {
-      Container::TilingWindow(_) => Some(focused_container),
-      _ => focused_workspace
+      Container::TilingWindow(_) if is_focused_workspace => {
+        Some(focused_container)
+      }
+      _ => target_workspace
         .descendant_focus_order()
         .find(Container::is_tiling_window),
     };
@@ -349,7 +436,7 @@ fn insertion_target(
 
   // Default to appending to workspace.
   Ok((
-    focused_workspace.clone().into(),
-    focused_workspace.child_count(),
+    target_workspace.clone().into(),
+    target_workspace.child_count(),
   ))
 }

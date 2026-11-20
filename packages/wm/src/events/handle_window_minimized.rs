@@ -42,11 +42,13 @@ pub fn handle_window_minimized(
       // cleared (e.g. most commands that call `update_window_state`).
       window.set_active_drag(None);
 
-      // Focus should be reassigned after a window has been minimized.
+      // Focus should be reassigned after a window has been minimized. The
+      // cursor is left where it is: minimizing is usually done with the
+      // mouse (e.g. via the taskbar), so jumping it would be unexpected.
       if let Some(focus_target) = state.focus_target_after_removal(&window)
       {
         set_focused_descendant(&focus_target, None);
-        state.pending_sync.queue_focus_change().queue_cursor_jump();
+        state.pending_sync.queue_focus_change();
         state.unmanaged_or_minimized_timestamp =
           Some(std::time::Instant::now());
       }

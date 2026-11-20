@@ -173,6 +173,14 @@ pub struct WindowBehaviorConfig {
   /// changes the defaults for when the state change commands, like
   /// `set_floating`, are used without any flags.
   pub state_defaults: WindowStateDefaultsConfig,
+
+  /// Whether new windows are added to the workspace of the monitor where
+  /// the OS spawned them, instead of the focused workspace.
+  pub open_on_native_monitor: bool,
+
+  /// Device paths of monitors where new windows are created as floating
+  /// at their original position, regardless of `initial_state`.
+  pub floating_monitors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
