@@ -177,11 +177,19 @@ fn create_window(
     config,
   )?;
 
-  // Windows that start maximized on a floating monitor go back to floating
-  // (instead of the default initial state) once unmaximized.
+  // Windows that start maximized or minimized on a floating monitor go
+  // back to floating (instead of the default initial state) once
+  // unmaximized or restored.
   let prev_state = (on_floating_monitor
-    && matches!(window_state, WindowState::Fullscreen(_)))
+    && matches!(
+      window_state,
+      WindowState::Fullscreen(_) | WindowState::Minimized
+    ))
   .then(|| WindowState::Floating(floating_monitor_state(config)));
+
+  // The frame of a minimized window is its minimized one, so its floating
+  // placement is taken once it's restored instead.
+  let is_minimized = native_properties.is_minimized;
 
   // Attach the new window as the first child of the target parent (if
   // provided), otherwise, add as a sibling of the focused container (or
@@ -272,6 +280,8 @@ fn create_window(
     &target_parent,
     Some(target_index),
   )?;
+
+  window_container.set_has_pending_placement_update(is_minimized);
 
   // The OS might spawn the window on a different monitor to the target
   // parent, so adjustments might need to be made because of DPI.

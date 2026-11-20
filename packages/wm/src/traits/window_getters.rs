@@ -137,6 +137,18 @@ pub trait WindowGetters: CommonGetters {
     has_pending_dpi_adjustment: bool,
   );
 
+  /// Whether `floating_placement` should be taken from the window's frame
+  /// once it's restored.
+  ///
+  /// Set for windows that were already minimized when managed, since their
+  /// frame at that point is the minimized one (e.g. 160x28).
+  fn has_pending_placement_update(&self) -> bool;
+
+  fn set_has_pending_placement_update(
+    &self,
+    has_pending_placement_update: bool,
+  );
+
   fn floating_placement(&self) -> Rect;
 
   fn set_floating_placement(&self, floating_placement: Rect);
@@ -172,6 +184,7 @@ pub trait WindowGetters: CommonGetters {
 ///
 /// Expects that the struct has a wrapping `RefCell` containing a struct
 /// with a `state`, `prev_state`, `native`, `has_pending_dpi_adjustment`,
+/// `has_pending_placement_update`,
 /// `border_delta`, `display_state`, and a `done_window_rules` field.
 #[macro_export]
 macro_rules! impl_window_getters {
@@ -225,6 +238,18 @@ macro_rules! impl_window_getters {
       ) {
         self.0.borrow_mut().has_pending_dpi_adjustment =
           has_pending_dpi_adjustment;
+      }
+
+      fn has_pending_placement_update(&self) -> bool {
+        self.0.borrow().has_pending_placement_update
+      }
+
+      fn set_has_pending_placement_update(
+        &self,
+        has_pending_placement_update: bool,
+      ) {
+        self.0.borrow_mut().has_pending_placement_update =
+          has_pending_placement_update;
       }
 
       fn floating_placement(&self) -> Rect {
