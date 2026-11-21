@@ -74,6 +74,13 @@ pub fn manage_window(
       window.workspace().context("No workspace.")?,
     );
 
+    // Keep a new tiling window out of sight until it's in its place, so
+    // it doesn't flash at its original position.
+    #[cfg(target_os = "windows")]
+    if should_hide_until_placed(&window, config) {
+      state.hidden_windows.hide(&window.native());
+    }
+
     // Sibling containers need to be redrawn if the window is tiling.
     state.pending_sync.queue_container_to_redraw(
       if window.state() == WindowState::Tiling {
@@ -85,6 +92,23 @@ pub fn manage_window(
   }
 
   Ok(())
+}
+
+/// Whether a newly managed window is hidden until it's placed.
+///
+/// Only tiling windows are moved into place. A transparency effect would
+/// override the hidden window's alpha before it's placed.
+#[cfg(target_os = "windows")]
+fn should_hide_until_placed(
+  window: &WindowContainer,
+  config: &UserConfig,
+) -> bool {
+  let effects = &config.value.window_effects;
+
+  config.value.window_behavior.hide_until_placed
+    && window.state() == WindowState::Tiling
+    && !effects.focused_window.transparency.enabled
+    && !effects.other_windows.transparency.enabled
 }
 
 /// Checks if a window is manageable and retrieves its native properties.

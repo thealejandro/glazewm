@@ -11,6 +11,8 @@ use wm_platform::{
 #[cfg(target_os = "windows")]
 use wm_platform::{NativeWindowWindowsExt, OpacityValue};
 
+#[cfg(target_os = "windows")]
+use crate::hidden_windows::HiddenWindows;
 use crate::{
   commands::{
     container::set_focused_descendant,
@@ -70,6 +72,10 @@ pub struct WmState {
   /// Whether the initial state has been populated.
   has_initialized: bool,
 
+  /// New tiling windows kept transparent until they're placed.
+  #[cfg(target_os = "windows")]
+  pub hidden_windows: HiddenWindows,
+
   /// Sender for emitting WM-related events.
   event_tx: mpsc::UnboundedSender<WmEvent>,
 
@@ -95,6 +101,8 @@ impl WmState {
       is_paused: false,
       is_focus_synced: false,
       has_initialized: false,
+      #[cfg(target_os = "windows")]
+      hidden_windows: HiddenWindows::default(),
       event_tx,
       exit_tx,
     }

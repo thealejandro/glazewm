@@ -273,6 +273,13 @@ pub trait NativeWindowWindowsExt {
   /// This method is only available on Windows.
   fn add_window_style_ex(&self, style: WINDOW_EX_STYLE);
 
+  /// Removes the given extended window style flag(s) from the window.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn remove_window_style_ex(&self, style: WINDOW_EX_STYLE);
+
   /// Sets the window's z-order.
   ///
   /// # Platform-specific
@@ -394,6 +401,10 @@ impl NativeWindowWindowsExt for NativeWindow {
 
   fn add_window_style_ex(&self, style: WINDOW_EX_STYLE) {
     self.inner.add_window_style_ex(style);
+  }
+
+  fn remove_window_style_ex(&self, style: WINDOW_EX_STYLE) {
+    self.inner.remove_window_style_ex(style);
   }
 
   fn set_z_order(&self, z_order: &WindowZOrder) -> crate::Result<()> {

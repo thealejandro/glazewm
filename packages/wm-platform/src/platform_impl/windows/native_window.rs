@@ -541,6 +541,22 @@ impl NativeWindow {
     }
   }
 
+  /// Implements [`NativeWindowWindowsExt::remove_window_style_ex`].
+  pub(crate) fn remove_window_style_ex(&self, style: WINDOW_EX_STYLE) {
+    // SAFETY: `GetWindowLongPtrW` and `SetWindowLongPtrW` only read and
+    // write the window's style; an invalid handle makes them fail.
+    let current_style =
+      unsafe { GetWindowLongPtrW(self.hwnd(), GWL_EXSTYLE) };
+
+    #[allow(clippy::cast_possible_wrap)]
+    if current_style & style.0 as isize != 0 {
+      let new_style = current_style & !(style.0 as isize);
+
+      // SAFETY: See above.
+      unsafe { SetWindowLongPtrW(self.hwnd(), GWL_EXSTYLE, new_style) };
+    }
+  }
+
   /// Implements [`NativeWindowWindowsExt::set_z_order`].
   pub(crate) fn set_z_order(
     &self,

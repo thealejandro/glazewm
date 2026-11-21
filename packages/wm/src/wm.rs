@@ -787,6 +787,10 @@ impl WindowManager {
   ) {
     self.state.emit_event(WmEvent::ApplicationExiting);
 
+    // Don't leave windows transparent that were waiting to be placed.
+    #[cfg(target_os = "windows")]
+    self.state.hidden_windows.reveal_all();
+
     // Ensure that the WM is unpaused, otherwise, shutdown commands won't
     // get executed.
     self.state.is_paused = false;

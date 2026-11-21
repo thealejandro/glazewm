@@ -36,6 +36,8 @@ use crate::{
 
 mod commands;
 mod events;
+#[cfg(target_os = "windows")]
+mod hidden_windows;
 mod ipc_server;
 mod models;
 mod pending_sync;

@@ -291,6 +291,20 @@ fn redraw_containers(
       tracing::warn!("Failed to set window position: {}", err);
     }
 
+    // A window hidden until placed is shown once it reaches its rect.
+    #[cfg(target_os = "windows")]
+    if is_visible {
+      if let Ok(rect) = target_rect(window) {
+        state.hidden_windows.reveal_when_placed(
+          &window.native(),
+          rect,
+          std::time::Duration::from_millis(u64::from(
+            config.value.window_behavior.fade_in_ms,
+          )),
+        );
+      }
+    }
+
     // Whether the window is either transitioning to or from fullscreen.
     // TODO: This check can be improved since `prev_state` can be
     // fullscreen without it needing to be marked as not fullscreen.
@@ -335,6 +349,15 @@ fn redraw_containers(
   Ok(())
 }
 
+/// Rect the window is moved to when shown, including its borders.
+fn target_rect(window: &WindowContainer) -> anyhow::Result<Rect> {
+  Ok(
+    window
+      .to_rect()?
+      .apply_delta(&window.total_border_delta()?, None),
+  )
+}
+
 fn reposition_window(
   window: &WindowContainer,
   hide_corner: HideCorner,
@@ -344,9 +367,7 @@ fn reposition_window(
   is_visible: bool,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
-  let rect = window
-    .to_rect()?
-    .apply_delta(&window.total_border_delta()?, None);
+  let rect = target_rect(window)?;
 
   // For `HideMethod::PlaceInCorner`, we need to reposition hidden windows
   // to the corner of the monitor.

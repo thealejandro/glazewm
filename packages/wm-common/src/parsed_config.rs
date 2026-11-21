@@ -181,6 +181,17 @@ pub struct WindowBehaviorConfig {
   /// Device paths of monitors where new windows are created as floating
   /// at their original position, regardless of `initial_state`.
   pub floating_monitors: Vec<String>,
+
+  /// Whether new tiling windows are kept transparent until they reach
+  /// their place in the layout, instead of jumping there.
+  ///
+  /// Not applied while a transparency window effect is enabled, or to
+  /// windows that are already layered.
+  pub hide_until_placed: bool,
+
+  /// Duration (in milliseconds) of the fade-in once a window hidden by
+  /// `hide_until_placed` is placed. `0` shows it at once.
+  pub fade_in_ms: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
