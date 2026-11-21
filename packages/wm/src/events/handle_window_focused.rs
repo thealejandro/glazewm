@@ -36,7 +36,10 @@ pub fn handle_window_focused(
   // target focus container, we reassign any focus events 100ms after
   // close/minimize. This will cause focus to briefly flicker to the OS
   // focus target and then to the WM's focus target.
-  if should_override_focus(state) {
+  let is_managed_or_desktop = found_window.is_some()
+    || native_window.is_desktop_window().unwrap_or(false);
+
+  if should_override_focus(state, is_managed_or_desktop) {
     state.pending_sync.queue_focus_change();
     return Ok(());
   }
@@ -105,10 +108,51 @@ pub fn handle_window_focused(
 }
 
 /// Returns true if focus should be reassigned to the WM's focus container.
-fn should_override_focus(state: &WmState) -> bool {
+fn should_override_focus(
+  state: &WmState,
+  is_managed_or_desktop: bool,
+) -> bool {
   let has_recent_unmanage = state
     .unmanaged_or_minimized_timestamp
     .is_some_and(|time| time.elapsed().as_millis() < 100);
 
-  has_recent_unmanage && !state.is_focus_synced
+  overrides_focus(
+    has_recent_unmanage,
+    state.is_focus_synced,
+    is_managed_or_desktop,
+  )
+}
+
+/// Whether to reassign focus after a recent close/minimize.
+///
+/// Only when the OS focused a managed window or the desktop. An unmanaged
+/// window (e.g. a Delphi form with an owner window) is the one the user was
+/// working in; taking focus from it sends it behind other windows.
+fn overrides_focus(
+  has_recent_unmanage: bool,
+  is_focus_synced: bool,
+  is_managed_or_desktop: bool,
+) -> bool {
+  has_recent_unmanage && !is_focus_synced && is_managed_or_desktop
+}
+
+#[cfg(test)]
+mod tests {
+  use super::overrides_focus;
+
+  #[test]
+  fn overrides_focus_on_managed_or_desktop_after_unmanage() {
+    assert!(overrides_focus(true, false, true));
+  }
+
+  #[test]
+  fn keeps_focus_on_unmanaged_window() {
+    assert!(!overrides_focus(true, false, false));
+  }
+
+  #[test]
+  fn no_override_without_recent_unmanage_or_when_synced() {
+    assert!(!overrides_focus(false, false, true));
+    assert!(!overrides_focus(true, true, true));
+  }
 }
