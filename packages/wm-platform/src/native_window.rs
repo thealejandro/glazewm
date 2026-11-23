@@ -287,6 +287,18 @@ pub trait NativeWindowWindowsExt {
   /// This method is only available on Windows.
   fn set_z_order(&self, zorder: &WindowZOrder) -> crate::Result<()>;
 
+  /// Stacks `windows` below this window, in the given order (first one
+  /// directly below), without moving or activating them.
+  ///
+  /// Windows are placed one at a time in the background, each once the
+  /// previous one is in place. Otherwise, each window's thread would apply
+  /// its request whenever it gets to it, leaving them in a random order.
+  ///
+  /// # Platform-specific
+  ///
+  /// This method is only available on Windows.
+  fn stack_below(&self, windows: &[NativeWindow]);
+
   /// Sets the visibility of the window's title bar.
   ///
   /// # Platform-specific
@@ -409,6 +421,10 @@ impl NativeWindowWindowsExt for NativeWindow {
 
   fn set_z_order(&self, z_order: &WindowZOrder) -> crate::Result<()> {
     self.inner.set_z_order(z_order)
+  }
+
+  fn stack_below(&self, windows: &[NativeWindow]) {
+    self.inner.stack_below(windows);
   }
 
   fn set_title_bar_visibility(&self, visible: bool) -> crate::Result<()> {

@@ -1,4 +1,11 @@
-use std::time::Duration;
+use std::{
+  collections::HashMap,
+  sync::{
+    atomic::{AtomicU64, Ordering},
+    LazyLock, Mutex,
+  },
+  time::{Duration, Instant},
+};
 
 use tokio::task;
 use tracing::warn;
@@ -28,7 +35,7 @@ use windows::{
         IsZoomed, SendNotifyMessageW, SetForegroundWindow,
         SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
         SetWindowPos, ShowWindowAsync, WindowFromPoint, GA_ROOT,
-        GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOP,
+        GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOP,
         HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
         LWA_COLORKEY, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
@@ -47,6 +54,42 @@ use crate::{
   Color, CornerStyle, Delta, Dispatcher, LengthValue, OpacityValue, Point,
   Rect, RectDelta, WindowId, WindowZOrder,
 };
+
+/// Identifies each `NativeWindow::stack_below` call.
+static STACK_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Latest `NativeWindow::stack_below` call (by generation) that includes
+/// each window handle.
+///
+/// A stacking stops once a newer one claims a window it has yet to place,
+/// while stackings of unrelated windows (e.g. other workspaces) continue.
+static STACK_OWNERS: LazyLock<Mutex<HashMap<isize, u64>>> =
+  LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether the stacking with the given generation is still the latest one
+/// that includes the window `handle`.
+fn owns_stacking(handle: isize, generation: u64) -> bool {
+  STACK_OWNERS
+    .lock()
+    .is_ok_and(|owners| owners.get(&handle) == Some(&generation))
+}
+
+/// How long to wait for a window to be stacked before moving on.
+///
+/// Owned windows (e.g. dialogs) can keep a window from being directly
+/// below another, in which case this timeout is reached.
+const STACK_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Interval between checks of a window's stacking.
+const STACK_POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+/// Whether the window `handle` is directly below the window `above` in the
+/// z-order.
+fn is_directly_below(handle: isize, above: isize) -> bool {
+  // SAFETY: `GetWindow` returns a null handle if the window no longer
+  // exists.
+  unsafe { GetWindow(HWND(handle), GW_HWNDPREV) }.0 == above
+}
 
 /// Magic number used to identify programmatic mouse inputs from our own
 /// process.
@@ -555,6 +598,68 @@ impl NativeWindow {
       // SAFETY: See above.
       unsafe { SetWindowLongPtrW(self.hwnd(), GWL_EXSTYLE, new_style) };
     }
+  }
+
+  /// Implements [`NativeWindowWindowsExt::stack_below`].
+  pub(crate) fn stack_below(&self, windows: &[crate::NativeWindow]) {
+    let generation = STACK_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let anchor = self.handle;
+    let handles = windows
+      .iter()
+      .map(|window| window.inner.handle)
+      .collect::<Vec<_>>();
+
+    // Claim the windows, so that ongoing stackings that include them stop.
+    if let Ok(mut owners) = STACK_OWNERS.lock() {
+      for handle in &handles {
+        owners.insert(*handle, generation);
+      }
+    }
+
+    task::spawn(async move {
+      let mut above = anchor;
+
+      for handle in &handles {
+        let handle = *handle;
+
+        // A newer stacking that includes this window supersedes this one.
+        if !owns_stacking(handle, generation) {
+          break;
+        }
+
+        if !is_directly_below(handle, above) {
+          let flags = SWP_NOACTIVATE
+            | SWP_NOMOVE
+            | SWP_NOSIZE
+            | SWP_NOSENDCHANGING
+            | SWP_ASYNCWINDOWPOS;
+
+          // SAFETY: Both handles are plain values; `SetWindowPos` fails
+          // gracefully if either window no longer exists.
+          let _ = unsafe {
+            SetWindowPos(HWND(handle), HWND(above), 0, 0, 0, 0, flags)
+          };
+
+          // The request is applied by the window's own thread; wait for
+          // it, so the next window is placed relative to the final
+          // position of this one.
+          let start = Instant::now();
+          while start.elapsed() < STACK_TIMEOUT
+            && !is_directly_below(handle, above)
+          {
+            tokio::time::sleep(STACK_POLL_INTERVAL).await;
+          }
+        }
+
+        above = handle;
+      }
+
+      if let Ok(mut owners) = STACK_OWNERS.lock() {
+        owners.retain(|handle, owner| {
+          *owner != generation || !handles.contains(handle)
+        });
+      }
+    });
   }
 
   /// Implements [`NativeWindowWindowsExt::set_z_order`].

@@ -207,6 +207,10 @@ fn redraw_containers(
   // Get monitors by their optimal hide corner.
   let monitors_by_hide_corner = state.monitors_by_hide_corner();
 
+  // Windows to stack below their workspace's focused window.
+  #[cfg(target_os = "windows")]
+  let mut windows_to_stack = Vec::new();
+
   for window in windows_to_update.iter().rev() {
     let should_bring_to_front = windows_to_bring_to_front.contains(window);
 
@@ -251,8 +255,27 @@ fn redraw_containers(
     //
     // NOTE: macOS doesn't have a robust public API for setting the z-order
     // of a window. See `NativeWindow::raise` for more details.
+    //
+    // Windows to stack below the focused window are instead stacked one by
+    // one after the loop (see `stack_below_focused`). Setting them all at
+    // once leaves them in a random order, since each request is applied
+    // asynchronously by the window's own thread.
     #[cfg(target_os = "windows")]
-    if should_bring_to_front && !windows_to_redraw.contains(window) {
+    let (z_order, is_stacked_below_focused) = match z_order {
+      WindowZOrder::AfterWindow(_) => (WindowZOrder::Normal, true),
+      z_order => (z_order, false),
+    };
+
+    #[cfg(target_os = "windows")]
+    if is_stacked_below_focused {
+      windows_to_stack.push((*window).clone());
+    }
+
+    #[cfg(target_os = "windows")]
+    if should_bring_to_front
+      && !windows_to_redraw.contains(window)
+      && !is_stacked_below_focused
+    {
       tracing::info!("Updating window z-order: {window}");
 
       if let Err(err) = window.native().set_z_order(&z_order) {
@@ -346,7 +369,44 @@ fn redraw_containers(
     }
   }
 
+  #[cfg(target_os = "windows")]
+  stack_below_focused(&windows_to_stack);
+
   Ok(())
+}
+
+/// Stacks the given windows below their workspace's focused window, in
+/// focus order (most recently focused first).
+#[cfg(target_os = "windows")]
+fn stack_below_focused(windows: &[WindowContainer]) {
+  let workspaces = windows
+    .iter()
+    .filter_map(CommonGetters::workspace)
+    .unique_by(CommonGetters::id);
+
+  for workspace in workspaces {
+    let mut focus_order = workspace
+      .descendant_focus_order()
+      .filter_map(|container| container.as_window_container().ok());
+
+    let Some(focused) = focus_order.next() else {
+      continue;
+    };
+
+    let windows_below = focus_order
+      .filter(|window| windows.contains(window))
+      .map(|window| window.native().clone())
+      .collect::<Vec<_>>();
+
+    if !windows_below.is_empty() {
+      tracing::info!(
+        "Stacking {} window(s) below focused window: {focused}",
+        windows_below.len()
+      );
+
+      focused.native().stack_below(&windows_below);
+    }
+  }
 }
 
 /// Rect the window is moved to when shown, including its borders.
