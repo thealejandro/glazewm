@@ -35,6 +35,24 @@ pub fn handle_window_moved_or_resized_end(
   state: &mut WmState,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
+  let result = end_drag(window, state, config);
+
+  // Otherwise the window would keep being handled as dragged, and only
+  // resized on redraws.
+  if result.is_err() {
+    window.set_active_drag(None);
+    state.pending_sync.queue_container_to_redraw(window.clone());
+  }
+
+  result
+}
+
+/// Applies the end of a drag. See `handle_window_moved_or_resized_end`.
+fn end_drag(
+  window: &WindowContainer,
+  state: &mut WmState,
+  config: &UserConfig,
+) -> anyhow::Result<()> {
   let Some(active_drag) = window.active_drag() else {
     return Ok(());
   };
@@ -316,7 +334,6 @@ fn drop_as_tiling_window(
     })?
     .context("No nearest container.")?;
 
-  let tiling_direction = target_parent.tiling_direction();
   let drop_position =
     drop_position(&mouse_pos, &nearest_container.to_rect()?);
 
@@ -326,6 +343,17 @@ fn drop_as_tiling_window(
     state,
     config,
   )?;
+
+  // Inserting the window into the tree flattens redundant split
+  // containers, which can detach `target_parent`. The children of a
+  // flattened container move to its parent, so the nearest container's
+  // current parent is always the one to drop into.
+  let target_parent: DirectionContainer = nearest_container
+    .parent()
+    .and_then(|parent| parent.as_direction_container().ok())
+    .context("Nearest container has no parent.")?;
+
+  let tiling_direction = target_parent.tiling_direction();
 
   let should_split = nearest_container.is_tiling_window()
     && match tiling_direction {
