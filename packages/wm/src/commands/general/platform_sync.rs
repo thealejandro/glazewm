@@ -358,6 +358,42 @@ fn target_rect(window: &WindowContainer) -> anyhow::Result<Rect> {
   )
 }
 
+/// How a window that isn't minimized or maximized has to be updated to
+/// reach its target position and z-order.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+enum PositionUpdate {
+  /// Already in place.
+  None,
+  /// In place, but the z-order may differ.
+  ZOrderOnly,
+  /// Needs to be moved or resized.
+  Full,
+}
+
+/// Picks the cheapest update for a window.
+///
+/// Repositioning a window to the rect it already has still redraws its
+/// frame and background, which shows as a flicker whenever the layout
+/// changes elsewhere.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn position_update(
+  is_at_target: bool,
+  z_order: &WindowZOrder,
+  is_topmost: bool,
+) -> PositionUpdate {
+  if !is_at_target {
+    return PositionUpdate::Full;
+  }
+
+  match (z_order, is_topmost) {
+    (WindowZOrder::Normal, false) | (WindowZOrder::TopMost, true) => {
+      PositionUpdate::None
+    }
+    _ => PositionUpdate::ZOrderOnly,
+  }
+}
+
 fn reposition_window(
   window: &WindowContainer,
   hide_corner: HideCorner,
@@ -415,7 +451,8 @@ fn reposition_window(
     {
       use wm_platform::{
         SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-        SWP_NOCOPYBITS, SWP_NOSENDCHANGING, WS_MAXIMIZEBOX,
+        SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSENDCHANGING, SWP_NOSIZE,
+        WS_EX_TOPMOST, WS_MAXIMIZEBOX,
       };
 
       // Restore window if it's minimized/maximized and shouldn't be. This
@@ -463,6 +500,34 @@ fn reposition_window(
 
           window.native().set_window_pos(z_order, &rect, swp_flags)?;
         }
+        _ if !should_restore && !window.has_pending_dpi_adjustment() => {
+          let is_at_target = window
+            .native()
+            .frame_with_shadows()
+            .is_ok_and(|frame| frame == rect);
+
+          match position_update(
+            is_at_target,
+            z_order,
+            window.native().has_window_style_ex(WS_EX_TOPMOST),
+          ) {
+            PositionUpdate::None => {}
+            PositionUpdate::ZOrderOnly => {
+              window.native().set_window_pos(
+                z_order,
+                &rect,
+                swp_flags & !SWP_NOCOPYBITS | SWP_NOMOVE | SWP_NOSIZE,
+              )?;
+            }
+            PositionUpdate::Full => {
+              window.native().set_window_pos(
+                z_order,
+                &rect,
+                swp_flags | SWP_FRAMECHANGED,
+              )?;
+            }
+          }
+        }
         _ => {
           swp_flags |= SWP_FRAMECHANGED;
 
@@ -474,6 +539,10 @@ fn reposition_window(
           // first move are resolved.
           if window.has_pending_dpi_adjustment() {
             window.native().set_window_pos(z_order, &rect, swp_flags)?;
+
+            // Otherwise every later redraw would move the window twice and
+            // repaint its frame although it's already in place.
+            window.set_has_pending_dpi_adjustment(false);
           }
         }
       }
@@ -637,4 +706,28 @@ fn apply_transparency_effect(
   };
 
   _ = window.native().set_transparency(transparency);
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn unchanged_windows_are_not_repositioned() {
+    use PositionUpdate::{Full, None, ZOrderOnly};
+
+    assert_eq!(position_update(false, &WindowZOrder::Normal, false), Full);
+    assert_eq!(position_update(true, &WindowZOrder::Normal, false), None);
+    assert_eq!(position_update(true, &WindowZOrder::TopMost, true), None);
+    assert_eq!(
+      position_update(true, &WindowZOrder::Normal, true),
+      ZOrderOnly,
+      "no longer shown on top"
+    );
+    assert_eq!(position_update(true, &WindowZOrder::Top, false), ZOrderOnly);
+    assert_eq!(
+      position_update(true, &WindowZOrder::TopMost, false),
+      ZOrderOnly
+    );
+  }
 }

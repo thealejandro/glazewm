@@ -569,8 +569,9 @@ impl NativeWindow {
       WindowZOrder::AfterWindow(window_id) => HWND(window_id.0),
     };
 
+    // `SWP_NOCOPYBITS` is left out, since it would discard the client
+    // area and make the window redraw it although it doesn't move.
     let flags = SWP_NOACTIVATE
-      | SWP_NOCOPYBITS
       | SWP_ASYNCWINDOWPOS
       | SWP_SHOWWINDOW
       | SWP_NOMOVE
