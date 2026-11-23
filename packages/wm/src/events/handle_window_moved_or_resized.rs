@@ -186,6 +186,7 @@ pub fn handle_window_moved_or_resized(
         // `WindowEvent::MovedOrResized` event.
         #[cfg(target_os = "macos")]
         initial_position: frame_position.clone(),
+        floating_placement: window.floating_placement(),
       }));
 
       #[cfg(target_os = "windows")]

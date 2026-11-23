@@ -112,12 +112,31 @@ pub fn handle_window_moved_or_resized_end(
         let window = drop_as_tiling_window(window, state, config)?;
         window.set_active_drag(None);
       } else {
+        let frame = window.native_properties().frame;
+
+        // A window that was tiling before the drag gets back the size it
+        // had as floating.
+        let frame = if active_drag.is_from_floating {
+          frame
+        } else {
+          with_size_under_cursor(
+            &frame,
+            &active_drag.floating_placement,
+            &state.dispatcher.cursor_position()?,
+          )
+        };
+
         update_floating_window_position(
           window,
-          window.native_properties().frame,
+          frame,
           &nearest_monitor,
           state,
         )?;
+
+        if !active_drag.is_from_floating {
+          state.pending_sync.queue_container_to_redraw(window.clone());
+        }
+
         window.set_active_drag(None);
       }
     }
@@ -200,6 +219,28 @@ fn should_drop_as_tiling(
     }
     Some(change) => !change.to_floating_monitor,
   }
+}
+
+/// Gets `frame` resized to the size of `placement`.
+///
+/// Keeps the top edge, and the cursor at the same relative horizontal
+/// position, so that the window stays under the cursor.
+fn with_size_under_cursor(
+  frame: &Rect,
+  placement: &Rect,
+  cursor: &Point,
+) -> Rect {
+  let width = placement.width();
+  let offset = i64::from((cursor.x - frame.x()).clamp(0, frame.width()))
+    * i64::from(width)
+    / i64::from(frame.width().max(1));
+
+  Rect::from_xy(
+    cursor.x - i32::try_from(offset).unwrap_or(0),
+    frame.y(),
+    width,
+    placement.height(),
+  )
 }
 
 /// Handles transition from temporary floating window to tiling window on
@@ -396,6 +437,25 @@ mod tests {
     assert!(!drop(false, false, true), "floated by the user");
     assert!(!drop(true, true, true), "onto another floating monitor");
     assert!(!should_drop_as_tiling(true, None, true), "same monitor");
+  }
+
+  #[test]
+  fn restored_size_keeps_cursor_on_the_title_bar() {
+    let frame = Rect::from_xy(1000, 100, 1000, 800);
+    let placement = Rect::from_xy(0, 0, 400, 300);
+
+    let cursor = Point { x: 1500, y: 110 };
+    assert_eq!(
+      with_size_under_cursor(&frame, &placement, &cursor),
+      Rect::from_xy(1300, 100, 400, 300)
+    );
+
+    let cursor = Point { x: 900, y: 110 };
+    assert_eq!(
+      with_size_under_cursor(&frame, &placement, &cursor),
+      Rect::from_xy(900, 100, 400, 300),
+      "cursor left of the frame"
+    );
   }
 
   #[test]

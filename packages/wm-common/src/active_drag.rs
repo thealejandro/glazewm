@@ -16,6 +16,12 @@ pub struct ActiveDrag {
   ///
   /// Used to calculate movement distance.
   pub initial_position: Rect,
+
+  /// Floating placement of the window when the drag started.
+  ///
+  /// Used to restore the size of a tiling window that is dropped as
+  /// floating.
+  pub floating_placement: Rect,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, PartialEq, Serialize)]
