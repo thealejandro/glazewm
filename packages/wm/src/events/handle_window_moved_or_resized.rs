@@ -395,7 +395,8 @@ pub fn update_floating_window_position(
       &updated_workspace.clone().into(),
       updated_workspace.child_count(),
       state,
-    )?;
+    )
+    .context("Failed to move floating window to another monitor.")?;
   }
 
   Ok(())

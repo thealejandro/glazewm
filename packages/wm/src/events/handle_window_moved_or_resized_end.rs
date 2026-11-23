@@ -307,7 +307,8 @@ fn drop_as_tiling_window(
       &target_parent.clone().into(),
       0,
       state,
-    )?;
+    )
+    .context("Failed to drop window into empty workspace.")?;
 
     moved_window.set_insertion_target(None);
 
@@ -342,7 +343,8 @@ fn drop_as_tiling_window(
     WindowState::Tiling,
     state,
     config,
-  )?;
+  )
+  .context("Failed to make dropped window tiling.")?;
 
   // Inserting the window into the tree flattens redundant split
   // containers, which can detach `target_parent`. The children of a
@@ -389,7 +391,8 @@ fn drop_as_tiling_window(
       &split_container.into(),
       target_index,
       state,
-    )?;
+    )
+    .context("Failed to drop window into new split container.")?;
   } else {
     let target_index = match drop_position {
       DropPosition::Top | DropPosition::Left => nearest_container.index(),
@@ -401,7 +404,8 @@ fn drop_as_tiling_window(
       &target_parent.clone().into(),
       target_index,
       state,
-    )?;
+    )
+    .context("Failed to drop window beside nearest container.")?;
   }
 
   state.pending_sync.queue_container_to_redraw(target_parent);
