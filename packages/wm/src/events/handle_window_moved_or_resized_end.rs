@@ -1,17 +1,18 @@
 use anyhow::Context;
 use wm_common::{
-  try_warn, FullscreenStateConfig, TilingDirection, WindowState,
+  try_warn, ActiveDrag, FullscreenStateConfig, InitialWindowState,
+  TilingDirection, WindowState,
 };
 use wm_platform::{LengthValue, Point, Rect};
 
 use crate::{
   commands::{
     container::{move_container_within_tree, wrap_in_split_container},
-    window::{set_window_size, update_window_state},
+    window::{is_floating_monitor, set_window_size, update_window_state},
   },
   events::update_floating_window_position,
   models::{
-    DirectionContainer, NonTilingWindow, SplitContainer, TilingContainer,
+    DirectionContainer, Monitor, NonTilingWindow, SplitContainer, TilingContainer,
     WindowContainer,
   },
   traits::{
@@ -98,18 +99,25 @@ pub fn handle_window_moved_or_resized_end(
         return Ok(());
       }
 
-      if active_drag.is_from_floating {
+      let tiling_by_default = matches!(
+        config.value.window_behavior.initial_state,
+        InitialWindowState::Tiling
+      );
+
+      if should_drop_as_tiling(
+        active_drag.is_from_floating,
+        monitor_change(&active_drag, &nearest_monitor, state, config),
+        tiling_by_default,
+      ) {
+        let window = drop_as_tiling_window(window, state, config)?;
+        window.set_active_drag(None);
+      } else {
         update_floating_window_position(
           window,
           window.native_properties().frame,
           &nearest_monitor,
           state,
         )?;
-        window.set_active_drag(None);
-      } else {
-        // Window is a temporary floating window that should be
-        // reverted back to tiling.
-        let window = drop_as_tiling_window(window, state, config)?;
         window.set_active_drag(None);
       }
     }
@@ -144,6 +152,54 @@ pub fn handle_window_moved_or_resized_end(
   }
 
   Ok(())
+}
+
+/// Change of monitor of a dragged window, by whether each monitor is in
+/// `floating_monitors`.
+#[derive(Clone, Copy, Debug)]
+struct MonitorChange {
+  from_floating_monitor: bool,
+  to_floating_monitor: bool,
+}
+
+/// Gets the change of monitor between the drag start and `nearest_monitor`.
+///
+/// Returns `None` if the window stayed on the same monitor.
+fn monitor_change(
+  active_drag: &ActiveDrag,
+  nearest_monitor: &Monitor,
+  state: &WmState,
+  config: &UserConfig,
+) -> Option<MonitorChange> {
+  let start_monitor = state
+    .monitor_at_point(&active_drag.initial_position.center_point())?;
+
+  (start_monitor.id() != nearest_monitor.id()).then(|| MonitorChange {
+    from_floating_monitor: is_floating_monitor(&start_monitor, config),
+    to_floating_monitor: is_floating_monitor(nearest_monitor, config),
+  })
+}
+
+/// Gets whether a dragged non-tiling window is dropped as tiling.
+///
+/// A window that was tiling before the drag returns to tiling, unless it's
+/// dropped on another monitor that is in `floating_monitors`. A floating
+/// window stays floating, unless it's moved from a floating monitor onto
+/// one that isn't, and new windows are tiling by default.
+fn should_drop_as_tiling(
+  is_from_floating: bool,
+  monitor_change: Option<MonitorChange>,
+  tiling_by_default: bool,
+) -> bool {
+  match monitor_change {
+    None => !is_from_floating,
+    Some(change) if is_from_floating => {
+      change.from_floating_monitor
+        && !change.to_floating_monitor
+        && tiling_by_default
+    }
+    Some(change) => !change.to_floating_monitor,
+  }
 }
 
 /// Handles transition from temporary floating window to tiling window on
@@ -315,5 +371,44 @@ fn drop_position(mouse_pos: &Point, rect: &Rect) -> DropPosition {
     } else {
       DropPosition::Top
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn floating_window_tiles_when_moved_off_a_floating_monitor() {
+    let drop = |from_floating_monitor, to_floating_monitor, tiling| {
+      should_drop_as_tiling(
+        true,
+        Some(MonitorChange {
+          from_floating_monitor,
+          to_floating_monitor,
+        }),
+        tiling,
+      )
+    };
+
+    assert!(drop(true, false, true));
+    assert!(!drop(true, false, false), "floating by default");
+    assert!(!drop(false, false, true), "floated by the user");
+    assert!(!drop(true, true, true), "onto another floating monitor");
+    assert!(!should_drop_as_tiling(true, None, true), "same monitor");
+  }
+
+  #[test]
+  fn tiling_window_floats_when_moved_onto_a_floating_monitor() {
+    let change = |to_floating_monitor| {
+      Some(MonitorChange {
+        from_floating_monitor: false,
+        to_floating_monitor,
+      })
+    };
+
+    assert!(!should_drop_as_tiling(false, change(true), true));
+    assert!(should_drop_as_tiling(false, change(false), true));
+    assert!(should_drop_as_tiling(false, None, true), "same monitor");
   }
 }

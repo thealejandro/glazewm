@@ -320,7 +320,7 @@ fn create_window(
 
 /// Gets whether the monitor is listed in `floating_monitors`, either by
 /// its device path or its device name.
-fn is_floating_monitor(monitor: &Monitor, config: &UserConfig) -> bool {
+pub fn is_floating_monitor(monitor: &Monitor, config: &UserConfig) -> bool {
   let properties = monitor.native_properties();
   #[cfg(target_os = "windows")]
   let names = [properties.device_path, Some(properties.device_name)];
