@@ -3,7 +3,7 @@ use wm_common::{VecDequeExt, WmEvent};
 
 use super::{
   attach_container, detach_container, flatten_child_split_containers,
-  set_focused_descendant,
+  flatten_split_container, set_focused_descendant,
 };
 use crate::{models::Container, traits::CommonGetters, wm_state::WmState};
 
@@ -26,6 +26,20 @@ pub fn move_container_within_tree(
   target_index: usize,
   state: &WmState,
 ) -> anyhow::Result<()> {
+  // Flatten split containers that only contain the container, apart from
+  // the target parent. Otherwise, detaching the container could remove the
+  // target parent from the tree (e.g. V[H[1]] when 1 is moved into V).
+  while let Some(split_parent) = container_to_move
+    .parent()
+    .and_then(|parent| parent.as_split().cloned())
+    .filter(|split_parent| {
+      split_parent.child_count() == 1
+        && Container::from(split_parent.clone()) != *target_parent
+    })
+  {
+    flatten_split_container(split_parent)?;
+  }
+
   // Create iterator of parent, grandparent, and great-grandparent.
   let ancestors =
     container_to_move.ancestors().take(3).collect::<Vec<_>>();

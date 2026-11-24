@@ -9,7 +9,9 @@ use crate::{
 /// Removes a container from the tree.
 ///
 /// If the container is a tiling container, the siblings will be resized to
-/// fill the freed up space. Will flatten empty parent split containers.
+/// fill the freed up space. Will flatten empty parent split containers,
+/// and remove any ancestor split containers that are left empty (e.g.
+/// `V[H[1]]` when 1 is removed).
 #[allow(clippy::needless_pass_by_value)]
 pub fn detach_container(child_to_remove: Container) -> anyhow::Result<()> {
   // Flatten the parent split container if it'll be empty after removing
@@ -55,5 +57,77 @@ pub fn detach_container(child_to_remove: Container) -> anyhow::Result<()> {
     }
   }
 
+  // An empty split container would otherwise remain in the tree and take
+  // up space. This happens when the removed container was the only
+  // descendant of a chain of split containers.
+  if parent.as_split().is_some_and(|split| split.child_count() == 0) {
+    detach_container(parent)?;
+  }
+
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use wm_common::{GapsConfig, TilingDirection, WorkspaceConfig};
+
+  use super::detach_container;
+  use crate::{
+    commands::container::attach_container,
+    models::{Container, SplitContainer, Workspace},
+    traits::{CommonGetters, TilingSizeGetters},
+  };
+
+  fn workspace() -> Workspace {
+    Workspace::new(
+      WorkspaceConfig {
+        name: "1".to_string(),
+        display_name: None,
+        bind_to_monitor: None,
+        keep_alive: false,
+      },
+      GapsConfig::default(),
+      TilingDirection::Horizontal,
+    )
+  }
+
+  fn split(tiling_direction: TilingDirection) -> SplitContainer {
+    SplitContainer::new(tiling_direction, GapsConfig::default())
+  }
+
+  fn attach(
+    child: &SplitContainer,
+    parent: &Container,
+  ) -> anyhow::Result<()> {
+    attach_container(&child.clone().into(), parent, None)
+  }
+
+  #[test]
+  fn removes_ancestor_splits_left_empty() -> anyhow::Result<()> {
+    // W[V[H[1]] 2] where 1 is removed should result in W[2].
+    let workspace = workspace();
+    let vertical = split(TilingDirection::Vertical);
+    let horizontal = split(TilingDirection::Horizontal);
+    let first = split(TilingDirection::Vertical);
+    let second = split(TilingDirection::Vertical);
+
+    attach(&vertical, &workspace.clone().into())?;
+    attach(&second, &workspace.clone().into())?;
+    attach(&horizontal, &vertical.clone().into())?;
+    attach(&first, &horizontal.clone().into())?;
+
+    detach_container(first.clone().into())?;
+
+    let child_ids = workspace
+      .children()
+      .iter()
+      .map(CommonGetters::id)
+      .collect::<Vec<_>>();
+
+    assert_eq!(child_ids, vec![second.id()]);
+    assert!(vertical.is_detached());
+    assert!(first.is_detached());
+    assert!((second.tiling_size() - 1.0).abs() < f32::EPSILON);
+    Ok(())
+  }
 }

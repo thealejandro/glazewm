@@ -317,7 +317,8 @@ fn drop_as_tiling_window(
       WindowState::Tiling,
       state,
       config,
-    );
+    )
+    .context("Failed to make window dropped into empty workspace tiling.");
   }
 
   let nearest_container = target_parent
