@@ -147,10 +147,25 @@ fn windows_to_bring_to_front(
         .next()
         .and_then(|container| container.as_window_container().ok());
 
+      let windows = workspace
+        .descendants()
+        .filter_map(|descendant| descendant.as_window_container().ok())
+        .collect::<Vec<_>>();
+
+      // Skip workspaces where no window has to be covered, e.g. one with
+      // only floating windows. The OS already raises the focused window,
+      // and restacking the rest by focus order would override the order
+      // they have on screen.
+      let focused_descendant = focused_descendant.filter(|focused| {
+        has_windows_to_cover(
+          &focused.state(),
+          &windows.iter().map(WindowGetters::state).collect::<Vec<_>>(),
+        )
+      });
+
       match focused_descendant {
-        Some(focused_descendant) => workspace
-          .descendants()
-          .filter_map(|descendant| descendant.as_window_container().ok())
+        Some(focused_descendant) => windows
+          .into_iter()
           .filter(|window| {
             let is_floating_or_tiling = matches!(
               window.state(),
@@ -167,6 +182,20 @@ fn windows_to_bring_to_front(
     .collect::<Vec<_>>();
 
   Ok(windows_to_bring_to_front)
+}
+
+/// Whether bringing windows in `focused_state` to front would place them
+/// above any window in another state (e.g. floating above tiling).
+///
+/// `states` are the states of the windows in the workspace.
+fn has_windows_to_cover(
+  focused_state: &WindowState,
+  states: &[WindowState],
+) -> bool {
+  states.iter().any(|state| {
+    !matches!(state, WindowState::Minimized)
+      && !state.is_same_state(focused_state)
+  })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -789,5 +818,26 @@ mod tests {
       position_update(true, &WindowZOrder::TopMost, false),
       ZOrderOnly
     );
+  }
+
+  #[test]
+  fn only_floating_windows_are_not_reordered() {
+    let floating = || {
+      WindowState::Floating(wm_common::FloatingStateConfig::default())
+    };
+
+    assert!(!has_windows_to_cover(&floating(), &[floating(), floating()]));
+    assert!(!has_windows_to_cover(&floating(), &[WindowState::Minimized]));
+    assert!(has_windows_to_cover(
+      &floating(),
+      &[floating(), WindowState::Tiling]
+    ));
+    assert!(has_windows_to_cover(&WindowState::Tiling, &[floating()]));
+    assert!(has_windows_to_cover(
+      &floating(),
+      &[WindowState::Fullscreen(
+        wm_common::FullscreenStateConfig::default()
+      )]
+    ));
   }
 }
